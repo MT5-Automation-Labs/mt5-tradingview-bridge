@@ -6,7 +6,7 @@
 //+---------------------------------------------------------------------+
 
 #property copyright "Copyright 2025, Nishant Prakash Garg"
-#property link      "https://github.com/niiisho/TradingView-MT5-Bridge"
+#property link      "https://github.com/MT5-Automation-Labs/mt5-tradingview-bridge"
 #property version   "5.1"
 #property strict
 
