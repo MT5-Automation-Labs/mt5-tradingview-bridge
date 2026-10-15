@@ -1,0 +1,307 @@
+//+---------------------------------------------------------------------+
+//| TradingView to MT5 Bridge - Trading Bot v5.1                        |
+//| Copyright 2025, Nishant Prakash Garg                                |
+//| https://github.com/niiisho/TradingView-MT5-Bridge                   |
+//| Licensed under MIT License                                          |
+//+---------------------------------------------------------------------+
+
+#property copyright "Copyright 2025, Nishant Prakash Garg"
+#property link      "https://github.com/niiisho/TradingView-MT5-Bridge"
+#property version   "5.1"
+#property strict
+
+#include <Trade\Trade.mqh>
+
+input double LotSize = 0.01;
+input int TakeProfitPoints = 100;
+input int StopLossPoints = 50;
+input int MagicNumber = 12345;
+input string ServerURL = "http://127.0.0.1:8080/signal";
+input string ProcessedURL = "http://127.0.0.1:8080/signal/processed";
+input string BridgeToken = ""; // Same value as BRIDGE_SECRET
+
+CTrade trade;
+uint lastCheckTime = 0;
+
+int OnInit()
+{
+   if(StringLen(BridgeToken) < 16 || StringFind(BridgeToken, "\r") >= 0 || StringFind(BridgeToken, "\n") >= 0)
+   {
+      Print("Set BridgeToken to the same secret as BRIDGE_SECRET (at least 16 characters, no line breaks).");
+      return INIT_FAILED;
+   }
+
+   trade.SetExpertMagicNumber(MagicNumber);
+   Print("✅ TradingBridge v5.1 Started");
+   Print("📡 Monitoring: ", ServerURL);
+   
+   // 🔥 CLEAR ANY OLD SIGNALS ON STARTUP
+   Print("🧹 Clearing any old signals on server...");
+   ClearOldSignalsOnStartup();
+   
+   return(INIT_SUCCEEDED);
+}
+
+void ClearOldSignalsOnStartup()
+{
+   // First, check if there's an old signal
+   string signal = "";
+   string status = "";
+   
+   if(GetSignalFromServer(signal, status))
+   {
+      if(signal != "" && signal != "NONE")
+      {
+         Print("⚠️ Found old signal on server: ", signal, " (Status: ", status, ")");
+         Print("🔄 Marking it as PROCESSED to prevent execution...");
+         
+         // Mark it as processed
+         MarkSignalProcessed();
+         
+         Print("✅ Old signal cleared! Ready for new signals.");
+      }
+      else
+      {
+         Print("✅ No old signals on server. Ready!");
+      }
+   }
+   else
+   {
+      Print("⚠️ Could not connect to server on startup");
+      Print("Make sure the bridge is running: python bridge/bridge.py");
+   }
+}
+
+void OnTick()
+{
+    uint CheckIntervalMs = 750;
+    uint currentTime = GetTickCount();
+    
+    if(currentTime - lastCheckTime < CheckIntervalMs)
+        return;
+    
+    lastCheckTime = currentTime;
+    
+    // Get signal and status from server
+    string signal = "";
+    string status = "";
+    
+    if(GetSignalFromServer(signal, status))
+    {
+        // 🔥 ONLY execute if status is "NEW"
+        if(status == "NEW" && signal != "" && signal != "NONE")
+        {
+                Print("📊 NEW Signal detected: ", signal); 
+                ProcessAlert(signal);
+                MarkSignalProcessed();
+                Print("✅ Signal processed and marked as PROCESSED on server");
+         }  
+     }
+}
+
+
+bool GetSignalFromServer(string &signal, string &status)
+{
+    char data[];
+    char result[];
+    string headers;
+    
+    string reqHeaders = "X-Bridge-Token: " + BridgeToken + "\r\n";
+    int res = WebRequest("GET", ServerURL, reqHeaders, 5000, data, result, headers);
+    
+    if(res == 200)
+    {
+        string json = CharArrayToString(result);
+        
+        // 🔥 Parse JSON to extract signal and status
+        signal = ParseJSONValue(json, "signal");
+        status = ParseJSONValue(json, "status");
+        
+        return true;
+    }
+    else if(res == -1)
+    {
+        Print("⚠️ WebRequest error!");
+        Print("⚠️ Add http://127.0.0.1:8080 to allowed URLs!");
+        Print("⚠️ Tools → Options → Expert Advisors → WebRequest");
+    }
+    else
+    {
+        Print("❌ Server error: ", res);
+    }
+    
+    return false;
+}
+
+
+void MarkSignalProcessed()
+{
+    char data[];
+    char result[];
+    string reqHeaders = "Content-Type: application/json\r\nX-Bridge-Token: " + BridgeToken + "\r\n";
+    string resultHeaders;
+    
+    // Send POST request
+    int res = WebRequest("POST", ProcessedURL, reqHeaders, 5000, data, result, resultHeaders);
+    
+    if(res == -1)
+    {
+        Print("⚠️ Could not mark signal as Processed");
+    }
+}
+
+
+string ParseJSONValue(string json, string key)
+{
+    // Find: "key":"value" or "key": "value"
+    string searchKey = "\"" + key + "\":";
+    int startPos = StringFind(json, searchKey);
+    
+    if(startPos == -1)
+        return "";
+    
+    // Move past the key and colon
+    startPos = startPos + StringLen(searchKey);
+    
+    // Skip whitespace and find opening quote
+    int jsonLen = StringLen(json);
+    bool foundQuote = false;
+    
+    for(int i = startPos; i < jsonLen; i = i + 1)
+    {
+        string currentChar = StringSubstr(json, i, 1);
+        
+        if(currentChar == "\"")
+        {
+            startPos = i + 1;
+            foundQuote = true;
+            break;
+        }
+        
+        if(currentChar != " " && currentChar != "\t")
+        {
+            break;
+        }
+    }
+    
+    if(!foundQuote)
+        return "";
+    
+    // Find closing quote
+    int endPos = StringFind(json, "\"", startPos);
+    
+    if(endPos == -1)
+        return "";
+    
+    return StringSubstr(json, startPos, endPos - startPos);
+}
+
+
+void ProcessAlert(string alert)
+{
+   if(PositionsTotal() > 0)
+   {
+      Print("⛔ ALREADY 1 TRADE OPEN - IGNORING SIGNAL");
+      return;
+   }
+   
+   int sl_pips = StopLossPoints;
+   int tp_pips = TakeProfitPoints;
+   double lot_size = LotSize;
+   
+   int sl_start = StringFind(alert, "SL=");
+   if(sl_start >= 0)
+   {
+      string sl_part = StringSubstr(alert, sl_start + 3);
+      int sl_end = StringFind(sl_part, " ");
+      if(sl_end < 0) sl_end = StringLen(sl_part);
+      string sl_str = StringSubstr(sl_part, 0, sl_end);
+      sl_pips = (int)StringToInteger(sl_str);
+   }
+   
+   int tp_start = StringFind(alert, "TP=");
+   if(tp_start >= 0)
+   {
+      string tp_part = StringSubstr(alert, tp_start + 3);
+      int tp_end = StringFind(tp_part, " ");
+      if(tp_end < 0) tp_end = StringLen(tp_part);
+      string tp_str = StringSubstr(tp_part, 0, tp_end);
+      tp_pips = (int)StringToInteger(tp_str);
+   }
+   
+   int lot_start = StringFind(alert, "LOT=");
+   if(lot_start >= 0)
+   {
+      string lot_part = StringSubstr(alert, lot_start + 4);
+      int lot_end = StringFind(lot_part, " ");
+      if(lot_end < 0) lot_end = StringLen(lot_part);
+      string lot_str = StringSubstr(lot_part, 0, lot_end);
+      lot_size = StringToDouble(lot_str);
+   }
+   
+   // ENFORCE LOT LIMITS
+   double min_lot = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MIN);
+   double max_lot = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MAX);
+   lot_size = MathMax(min_lot, MathMin(max_lot, lot_size));
+
+
+   if(StringFind(alert, "BUY") >= 0)
+   {
+      OpenBuyOrder(Symbol(), lot_size, sl_pips, tp_pips);
+      return;
+   }
+   
+   if(StringFind(alert, "SELL") >= 0)
+   {
+      OpenSellOrder(Symbol(), lot_size, sl_pips, tp_pips);
+      return;
+   }
+}
+
+
+void OpenBuyOrder(string symbol, double lot, int sl_pips, int tp_pips)
+{
+   ClosePositionsByType(symbol, POSITION_TYPE_SELL);
+   
+   double ask = SymbolInfoDouble(symbol, SYMBOL_ASK);
+   double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+   double tp = ask + tp_pips * point;
+   double sl = ask - sl_pips * point;
+   
+   if(trade.Buy(lot, symbol, ask, sl, tp, "BUY"))
+      Print("✅ BUY OPENED! LOT=", lot, " SL=", sl_pips, " TP=", tp_pips);
+   else
+      Print("❌ BUY FAILED: ", trade.ResultRetcode());
+}
+
+
+void OpenSellOrder(string symbol, double lot, int sl_pips, int tp_pips)
+{
+   ClosePositionsByType(symbol, POSITION_TYPE_BUY);
+   
+   double bid = SymbolInfoDouble(symbol, SYMBOL_BID);
+   double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+   double tp = bid - tp_pips * point;
+   double sl = bid + sl_pips * point;
+   
+   if(trade.Sell(lot, symbol, bid, sl, tp, "SELL"))
+      Print("✅ SELL OPENED! LOT=", lot, " SL=", sl_pips, " TP=", tp_pips);
+   else
+      Print("❌ SELL FAILED: ", trade.ResultRetcode());
+}
+
+
+void ClosePositionsByType(string symbol, ENUM_POSITION_TYPE type)
+{
+   for(int i = PositionsTotal()-1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(PositionSelectByTicket(ticket) && 
+         PositionGetString(POSITION_SYMBOL) == symbol &&
+         PositionGetInteger(POSITION_MAGIC) == MagicNumber &&
+         PositionGetInteger(POSITION_TYPE) == type)
+      {
+         trade.PositionClose(ticket);
+      }
+   }
+}

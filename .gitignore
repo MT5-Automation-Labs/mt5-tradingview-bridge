@@ -1,0 +1,20 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+*.log
+.idea/
+.vscode/
+
+
+# Added for MT5-Automation-Labs
+__pycache__/
+*.pyc
+.env
+*.log
+logs/
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.ex5
