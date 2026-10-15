@@ -193,3 +193,7 @@ Open an issue or a pull request. Keep each change limited to the bridge, the ext
 Released under the [MIT License](LICENSE). Copyright (c) 2025 Nishant Prakash Garg.
 
 This project is independent. It is not affiliated with TradingView, MetaQuotes, or MetaTrader.
+
+## Contact
+
+Telegram: [t.me/teraus111](https://t.me/teraus111)
